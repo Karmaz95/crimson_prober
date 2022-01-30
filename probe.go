@@ -513,7 +513,7 @@ func main() {
 	address := flag.String("a", "45.33.32.156", "Hosts to scan")
 	ports := flag.String("p", "1-65535", "Ports to scan")
 	socks5 := flag.String("s", "socks5_proxies.txt", "File with socks5 proxies.")
-	vps_opened := flag.String("o", "127.0.0.1:7192", "Open port on your VPS")
+	vps_opened := flag.String("o", "127.0.0.1:7192", "Opened port on your VPS")
 	vps_closed := flag.String("c", "127.0.0.1:443", "Closed port on your VPS")
 	download_s5 := flag.Bool("d", false, "Download daily updated free S5 list")
 	flag.Parse()
