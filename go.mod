@@ -1,4 +1,4 @@
-module github.com/Karmaz95/crimson_prober
+module crimson_prober
 
 go 1.17
 
