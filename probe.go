@@ -52,6 +52,9 @@
 
 10. DOWNLOADER (download_s5)
 	- Downloads many S5 proxies lists from known gihtub repositories.
+
+11. INITAL S5 CHECKS (s5_init_check)
+	- Check all socks5 proxies via http method using HTTP_WORKER
 */
 
 package main
@@ -82,7 +85,7 @@ func DownloadFile(filepath string, url string) error {
 	}
 	defer resp.Body.Close()
 	// Create the file
-	out, err := os.OpenFile(filepath, os.O_APPEND|os.O_WRONLY, 0600)
+	out, err := os.OpenFile(filepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
@@ -134,12 +137,12 @@ func removeDuplicateStr(strSlice []string) []string {
 func print_options(ip_list []string, port_list []int, target_list, socks5_list []string) {
 	/* 	Print all data that were chosen */
 	//fmt.Println("===============\nIPV4: ", ip_list)
-	fmt.Println("==============================")
+	fmt.Println("=================================")
 	//fmt.Println("PORTS: ", port_list )
 	//fmt.Println("===============")
 	fmt.Println("TOTAL TARGETS TO SCAN: ", len(target_list))
 	fmt.Println("TOTAL SOCKS5  PROXIES: ", len(socks5_list))
-	fmt.Println("==============================")
+	fmt.Println("=================================")
 }
 
 func host_parser(address string) []string {
@@ -287,6 +290,86 @@ func socks5_loader(socks5_path string) []string {
 	return socks5_list
 }
 
+func http_worker(targets, results chan string) {
+	/* 	1. Prepare HTTP client using given S5 as a relay proxy.
+	2. Connect to the api.ipify.org.
+	3. If there are no errors, given S5 passed the initial check.
+	*/
+	r := ""
+	d := net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: -1 * time.Second,
+	}
+	// Connect to the channel with S5 services
+	for s5 := range targets {
+		// Prepare a dialer with S5 as a relay.
+		dialer, _ := proxy.SOCKS5("tcp", s5, nil, &d)
+		// Prepare a HTTP client
+		httpClient := &http.Client{
+			// Set maximum time for connection for 5 seconds
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				// Turn off sending keep alive packets, to imidiatelly close the connection after recieve the response.
+				DisableKeepAlives: true,
+				// Use S5 dialer to connect.
+				Dial: dialer.Dial,
+			},
+		}
+		// Make a connection using created HTTP client.
+		response, err := httpClient.Get("https://api.ipify.org?format=json")
+		// If there were errors send given S5 proxy as an invalid address to the results channel.
+		if err != nil {
+			r = s5 + ",false"
+			results <- r
+		} else {
+			// If there were no errors, send given S5 proxy as a valid address to the results channel.
+			r = s5 + ",true"
+			results <- r
+			// If there were no errors, close the connection.
+			defer response.Body.Close()
+		}
+	}
+
+}
+
+func s5_init_check(socks5_list []string) []string {
+	// Check all S5 proxies via http method using HTTP_WORKERS.
+	// Same method like with TCP_MANAGER and TCP_WORKERS - described below.
+
+	// Initialize the valid_s5_list to return a slice of valid proxies after all checks.
+	valid_s5_list := []string{}
+	// Initialize a buffered channel for a maximum 100 workers.
+	targets := make(chan string, 100)
+	// Initialize unbuffered results channel
+	results := make(chan string)
+	// Progress bar feature.
+	bar := progressbar.Default(int64(len(socks5_list)))
+	// Run 100 HTTP_WORKERS
+	for i := 0; i < cap(targets); i++ {
+		go http_worker(targets, results)
+	}
+	// Send all S5 proxies via targets channel to HTTP_WORKERS
+	go func() {
+		for _, s5 := range socks5_list {
+			targets <- s5
+		}
+	}()
+	// Wait for all response from HTTP_WORKERS via results channel
+	for i := 0; i < len(socks5_list); i++ {
+		resp := <-results
+		bar.Add(1)
+		if strings.Split(resp, ",")[1] == "true" {
+			// append results to a slice.
+			valid_s5_list = append(valid_s5_list, strings.Split(resp, ",")[0])
+		}
+	}
+	// Close all initialized channels after the work is finished.
+	close(targets)
+	close(results)
+	// Return the slice for valid S5 proxies.
+	return valid_s5_list
+}
+
 func create_socks5_tcp_dialer(socks5_addr string) proxy.Dialer {
 	// Creates SOCKS5 TCP dialer interface
 	/*
@@ -294,46 +377,61 @@ func create_socks5_tcp_dialer(socks5_addr string) proxy.Dialer {
 			- https://pkg.go.dev/golang.org/x/net/proxy
 			- func SOCKS5(network, addr , auth , forward Dialer) (Dialer, error)
 	*/
-	//socks5_dialer_tcp, err := proxy.SOCKS5("tcp", socks5_addr, nil, proxy.Direct)
-	socks5_dialer_tcp, err := proxy.SOCKS5("tcp", socks5_addr, nil, &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Second})
+	d := net.Dialer{
+		Timeout: 5 * time.Second,
+		// If negative, keep-alive probes are disabled.
+		KeepAlive: -1 * time.Second,
+	}
+	socks5_dialer_tcp, _ := proxy.SOCKS5("tcp", socks5_addr, nil, &d)
+	/* Validate if there are any connection being made, not sure about it - read the docs and get back #KARMAZ
 	if err != nil {
 		fmt.Println("Error connecting to proxy:", err)
-	}
+	} */
+	// If there is such case, take the functionality from socks5_validator - and check every proxy here im this fucntion.
+	// but first, check if the err could be used for that to not double the connections.
 	return socks5_dialer_tcp
 }
 
-//=========================================================================
+//===============================================================================
 func socks5_validator(socks5_addr, vps_opened, vps_closed string) (bool, string) {
 	/* 	Check if SOCKS5 proxy is valid.
-	   	1. Connect to the open port on the server under my control using proxy.
-	   	2. Connect to the closed port on the server under my control using proxy.
+		1. Check if SOCKS5 proxy service is alive.
+	   	2. Connect to the open port on the server under your control using proxy.
+	   	3. Connect to the closed port on the server under your control using proxy.
 	   		- If both checks are true then, SOCKS5 proxy is considered as valid - true.
 	   		- If one of the check is false, SOCKS5 proxy is considered as invalid - false.
 	   	3. Returns true/false and s5_addr.
 	*/
+	// Check if S5 is alive.
+	d := net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: -1 * time.Second, // Negative number is equla "do not send any keep alive packets"
+	}
+	conn, err := d.Dial("tcp", socks5_addr)
+	if err != nil {
+		return false, socks5_addr
+	} else {
+		conn.Close()
+	}
 	// Create SOCKS5 dialer
 	socks5_dialer_tcp := create_socks5_tcp_dialer(socks5_addr)
 	// Make connection using SOCKS5 proxy to the opened port on the vps.
 	conn_1, err := socks5_dialer_tcp.Dial("tcp", vps_opened)
 	// If it was successful and not generate any error then check1 is passed.
 	if err == nil {
-		//fmt.Println("CHECK 1: PASSED")
 		conn_1.Close()
 		// If error was generated then check is not passed and do not make check2.
 	} else {
-		//fmt.Println("CHECK 1: NOT PASSED")
 		return false, socks5_addr
 	}
 	// Make connection using SOCKS5 proxy to the closed port on the vps.
 	conn_2, err := socks5_dialer_tcp.Dial("tcp", vps_closed)
 	// If it was unsuccessful and error was generated then check2 is passed.
 	if err != nil {
-		//fmt.Println("CHECK 2: PASSED")
 		// If both checks were passed then return false.
 		return true, socks5_addr
 		// If error was not generated then check2 is not passed.
 	} else {
-		//fmt.Println("CHECK 2: NOT PASSED")
 		conn_2.Close()
 		return false, socks5_addr
 	}
@@ -489,11 +587,13 @@ func s5_worker(vps_opened, vps_closed, s5_addr string, s5_valids, s5_results cha
 
 func remind_vps(vps_opened, vps_closed string) {
 	vps_reminder := ""
-	fmt.Printf("1. IS %s\tOPENED?\n2. IS %s\tCLOSED?\n==============================\n", vps_opened, vps_closed)
-	fmt.Printf("ncat -lkvp %s --max-conns 2000\n==============================\nPRESS ANY KEY TO CONTINUE", strings.Split(vps_opened, ":")[1])
+	fmt.Println("=================================")
+	fmt.Printf("1. IS %s\tOPENED?\n2. IS %s\tCLOSED?\n=================================\n", vps_opened, vps_closed)
+	fmt.Printf("ncat -lkvp %s --max-conns 2000\n=================================\nPRESS ANY KEY TO CONTINUE", strings.Split(vps_opened, ":")[1])
 	fmt.Scanln(&vps_reminder)
-	fmt.Println("STARTING SCANNING")
-	fmt.Println("==============================")
+	fmt.Println("=================================")
+	fmt.Println("CHECKING ALL SOCKS5 PROXIES")
+	fmt.Println("=================================")
 }
 
 func download_socks5() {
@@ -509,7 +609,7 @@ func download_socks5() {
 }
 
 func main() {
-	// PARSING FLAGS ===================================================
+	// PARSING FLAGS ======================================================
 	address := flag.String("a", "45.33.32.156", "Hosts to scan")
 	ports := flag.String("p", "1-65535", "Ports to scan")
 	socks5 := flag.String("s", "socks5_proxies.txt", "File with socks5 proxies.")
@@ -517,7 +617,7 @@ func main() {
 	vps_closed := flag.String("c", "127.0.0.1:443", "Closed port on your VPS")
 	download_s5 := flag.Bool("d", false, "Download daily updated free S5 list")
 	flag.Parse()
-	// END OF PARSING FLAGS ============================================
+	// END OF PARSING FLAGS ===============================================
 
 	// DOWNLOAD S5 PROXIES
 	if *download_s5 {
@@ -530,23 +630,28 @@ func main() {
 	// PREPARE TARGETS TO SCAN
 	target_list := prepare_targets(ip_list, port_list)
 	// LOAD SOCKS5 PROXIES LIST
-	s5_array := socks5_loader(*socks5)
-	// PRINT VARIABLES
-	print_options(ip_list, port_list, target_list, s5_array)
+	init_s5_array := socks5_loader(*socks5)
 	// WAIT FOR USER CONNFIRMATION ABOUT VPS STATUS
 	remind_vps(*vps_opened, *vps_closed)
+	// INITIAL S5 PROXIES CHECK
+	s5_array := s5_init_check(init_s5_array)
+	// PRINT VARIABLES
+	print_options(ip_list, port_list, target_list, s5_array)
 	// START S5 MANAGER AS A GO ROUTINE
 	go s5_manager(s5_array, *vps_opened, *vps_closed)
 	time.Sleep(1 * time.Second)
 	// START TCP SCANNING
+	fmt.Println("=================================")
+	fmt.Println("START SCANNING")
+	fmt.Println("=================================")
 	found_services := tcp_scanner(target_list)
 	// PRINT ALIVE SERVICES AFTER TCP PORT SCANNING
-	fmt.Println("==============================")
+	fmt.Println("=================================")
 	for _, service := range found_services {
 		fmt.Printf("Open %s\n", service)
 	}
 	fmt.Println("FOUND SERVICES", len(found_services))
-	fmt.Println("==============================")
+	fmt.Println("=================================")
 	//fmt.Println("FINAL WORKING SOCKS LIST: ", s5_array)
 }
 
