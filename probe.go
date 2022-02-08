@@ -6,7 +6,7 @@
 		- removes whitespaces between addresses automatically
 	- CIDR range parsing 				=> -a 1.1.1.0/24
 	- by default set to localhost		=> -a 127.0.0.1
-2. PORT PARSER (port_praser):
+2. PORT PARSER (port_parser):
 	- single port parsing				=> -p 2
 	- comma separated port list parsing => -p 1,4, 6
 		removes whitespaces between ports automatically
