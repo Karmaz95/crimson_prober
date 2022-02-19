@@ -23,5 +23,5 @@ crimson_prober -a "<target_ip> -c "<vps_ip>:<closed_port>" -o "<vps_ip>:<opened_
 
 ##### [Medium article](https://karol-mazurek95.medium.com/better-service-discovery-de48dcbf2c9c)
 
-Many thanks to my colleague [Piotr Madej](https://www.linkedin.com/in/piotr-madej-18b0bb38/), who inspired me to create the tool.
+Many thanks to my colleague [Piotr Madej](https://www.linkedin.com/in/piotr-madej-18b0bb38/), who inspired me to create the tool.  
 He made a similar scanner for socks4 proxies in Python, available at this [link](https://github.com/piotr-madej/TCP-CONNECT-TOR-Scan).
