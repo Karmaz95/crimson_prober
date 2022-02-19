@@ -19,5 +19,6 @@ crimson_prober -a "<target_ip> -c "<vps_ip>:<closed_port>" -o "<vps_ip>:<opened_
 ```
 
 ##### Socks5 proxies source:
-List of socks5 proxies: https://proxyscrape.com/free-proxy-list
+[List of socks5 proxies](https://proxyscrape.com/free-proxy-list)
 
+##### [Medium article](https://karol-mazurek95.medium.com/better-service-discovery-de48dcbf2c9c)
