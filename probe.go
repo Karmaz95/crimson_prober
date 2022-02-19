@@ -51,7 +51,7 @@
 	- If s5_addr was invalid send s5_reqs to s5_manager for another s5 to check.
 
 10. DOWNLOADER (download_s5)
-	- Downloads many S5 proxies lists from known gihtub repositories.
+	- Downloads many S5 proxies lists from known github repositories.
 
 11. INITAL S5 CHECKS (s5_init_check)
 	- Check all socks5 proxies via http method using HTTP_WORKER
@@ -124,17 +124,17 @@ func FileToLines(filePath string) (lines []string, err error) {
 func removeDuplicateStr(strSlice []string) []string {
 	// REMOVE DUPLICATES FROM SLICE - for prepare_target and loading socks5
 	allKeys := make(map[string]bool)
-	list := []string{}
+	list1 := []string{}
 	for _, item := range strSlice {
 		if _, value := allKeys[item]; !value {
 			allKeys[item] = true
-			list = append(list, item)
+			list1 = append(list1, item)
 		}
 	}
-	return list
+	return list1
 }
 
-func print_options(ip_list []string, port_list []int, target_list, socks5_list []string) {
+func print_options(target_list, socks5_list []string) {
 	/* 	Print all data that were chosen */
 	//fmt.Println("===============\nIPV4: ", ip_list)
 	fmt.Println("=================================")
@@ -329,7 +329,6 @@ func http_worker(targets, results chan string) {
 			defer response.Body.Close()
 		}
 	}
-
 }
 
 func s5_init_check(socks5_list []string) []string {
@@ -371,71 +370,15 @@ func s5_init_check(socks5_list []string) []string {
 }
 
 func create_socks5_tcp_dialer(socks5_addr string) proxy.Dialer {
-	// Creates SOCKS5 TCP dialer interface
-	/*
-		* SOCKS5 function explanation:
-			- https://pkg.go.dev/golang.org/x/net/proxy
-			- func SOCKS5(network, addr , auth , forward Dialer) (Dialer, error)
-	*/
 	d := net.Dialer{
-		Timeout: 5 * time.Second,
-		// If negative, keep-alive probes are disabled.
+		Timeout:   5 * time.Second,
 		KeepAlive: -1 * time.Second,
 	}
 	socks5_dialer_tcp, _ := proxy.SOCKS5("tcp", socks5_addr, nil, &d)
-	/* Validate if there are any connection being made, not sure about it - read the docs and get back #KARMAZ
-	if err != nil {
-		fmt.Println("Error connecting to proxy:", err)
-	} */
-	// If there is such case, take the functionality from socks5_validator - and check every proxy here im this fucntion.
-	// but first, check if the err could be used for that to not double the connections.
 	return socks5_dialer_tcp
 }
 
 //===============================================================================
-func socks5_validator(socks5_addr, vps_opened, vps_closed string) (bool, string) {
-	/* 	Check if SOCKS5 proxy is valid.
-		1. Check if SOCKS5 proxy service is alive.
-	   	2. Connect to the open port on the server under your control using proxy.
-	   	3. Connect to the closed port on the server under your control using proxy.
-	   		- If both checks are true then, SOCKS5 proxy is considered as valid - true.
-	   		- If one of the check is false, SOCKS5 proxy is considered as invalid - false.
-	   	3. Returns true/false and s5_addr.
-	*/
-	// Check if S5 is alive.
-	d := net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: -1 * time.Second, // Negative number is equla "do not send any keep alive packets"
-	}
-	conn, err := d.Dial("tcp", socks5_addr)
-	if err != nil {
-		return false, socks5_addr
-	} else {
-		conn.Close()
-	}
-	// Create SOCKS5 dialer
-	socks5_dialer_tcp := create_socks5_tcp_dialer(socks5_addr)
-	// Make connection using SOCKS5 proxy to the opened port on the vps.
-	conn_1, err := socks5_dialer_tcp.Dial("tcp", vps_opened)
-	// If it was successful and not generate any error then check1 is passed.
-	if err == nil {
-		conn_1.Close()
-		// If error was generated then check is not passed and do not make check2.
-	} else {
-		return false, socks5_addr
-	}
-	// Make connection using SOCKS5 proxy to the closed port on the vps.
-	conn_2, err := socks5_dialer_tcp.Dial("tcp", vps_closed)
-	// If it was unsuccessful and error was generated then check2 is passed.
-	if err != nil {
-		// If both checks were passed then return false.
-		return true, socks5_addr
-		// If error was not generated then check2 is not passed.
-	} else {
-		conn_2.Close()
-		return false, socks5_addr
-	}
-}
 
 // Declare global channels ---------
 var s5_results = make(chan string)
@@ -444,7 +387,7 @@ var s5_valids = make(chan string)
 
 // --------------------------------
 
-func tcp_scanner(target_list []string) []string {
+func tcp_scanner(target_list []string, n_threads int) []string {
 	/* 	1. Create [targets chan string] and [results chan string].
 	2. Create tcp_workers (threads).
 	3. Send targets to scan through the [targets chan string].
@@ -453,7 +396,7 @@ func tcp_scanner(target_list []string) []string {
 	*/
 
 	// This channel will receive targets to be scanned.
-	targets := make(chan string, 100)
+	targets := make(chan string, n_threads)
 	// This channel will receive results of scanning.
 	results := make(chan string)
 	// A slice to store the results.
@@ -500,33 +443,23 @@ func tcp_worker(s5_results, targets, results chan string, s5_reqs chan bool) {
 	6. Release the S5 address by sending the S5_addr through s5_valids to S5 MANAGER.
 	*/
 
-	// Take target from targets channel and start the work.
 	for target := range targets {
-		// Ask s5_manager for s5
 		s5_reqs <- true
-		// Wait for response from S5_WORKER
 		for s5_proxy := range s5_results {
-			// Prepare a dialer for current target with given s5.
 			s5_dialer_tcp := create_socks5_tcp_dialer(s5_proxy)
-			// Scan target using s5
 			conn, err := s5_dialer_tcp.Dial("tcp", target)
 			if err != nil {
-				// Send "0" to the results channel and continue the work.
 				results <- "0"
-				// Jump  from the s5_proxy channel to targets
 				break
 			}
-			// Close connection
 			conn.Close()
-			// If there were no errors, send the service to results channel.
 			results <- target
-			// Jump  from the s5_proxy channel to targets
 			break
 		}
 	}
 }
 
-func s5_manager(s5_array []string, vps_opened, vps_closed string) {
+func s5_manager(s5_array []string, vps_opened, vps_closed string, n_threads int) {
 	/*	1. Make linked list from loaded to memory s5array.
 		2. Start go routine which will handle the updating of the s5_queue.
 		3. Connect to s5_reqs channel and wait for requests from TCP_WORKER OR S5_WORKER.
@@ -536,6 +469,12 @@ func s5_manager(s5_array []string, vps_opened, vps_closed string) {
 			3.2. Create s5_worker which validates the s5_addr.
 		5. Add valid address to the back of the list using go routine at point 2.
 	*/
+	// Declare a buffered channel for a maximum 100 workers & initialize them.
+	targets := make(chan string, n_threads)
+	for i := 0; i < cap(targets); i++ {
+		go s5_worker(vps_opened, vps_closed, targets, s5_valids, s5_results)
+	}
+
 	// Load SOCKS5 array into a list.
 	s5_queue := list.New()
 	for _, element := range s5_array {
@@ -561,27 +500,74 @@ func s5_manager(s5_array []string, vps_opened, vps_closed string) {
 		s5_queue.Remove(s5_addr_interface)
 		// Convert interface to string
 		s5_addr := fmt.Sprint(s5_addr_interface.Value)
-		// Start a new thread with a s5_worker
-		go s5_worker(vps_opened, vps_closed, s5_addr, s5_valids, s5_results)
+		// Send S5_ADDR to S5_WORKER
+		targets <- s5_addr
 	}
+	close(targets)
 }
 
-func s5_worker(vps_opened, vps_closed, s5_addr string, s5_valids, s5_results chan string) {
+func s5_worker(vps_opened, vps_closed string, targets, s5_valids, s5_results chan string) {
 	/*	1. Validate given s5_addr.
 		2. If s5_addr is valid send this address via two channels.
 			2.1. First to TCP_WORKER via s5_results to start scanning.
 			2.3. Then to S5_MANAGER via s5_valids to add this addr to s5_queue list.
 		3. If s5_addr was invalid send s5_reqs to s5_manager.
 	*/
-	is_valid, validated_s5 := socks5_validator(s5_addr, vps_opened, vps_closed)
-	if is_valid {
-		// If s5_addr was valid send the results
-		s5_results <- validated_s5
-		// Release the S5 PROXY
-		s5_valids <- validated_s5
+	for s5_addr := range targets {
+		is_valid, validated_s5 := socks5_validator(s5_addr, vps_opened, vps_closed)
+		if is_valid {
+			// If s5_addr was valid send the results
+			s5_results <- validated_s5
+			// Release the S5 PROXY
+			s5_valids <- validated_s5
+		} else {
+			// If s5_addr was invalid ask que for another
+			s5_reqs <- true
+		}
+	}
+}
+
+func socks5_validator(socks5_addr, vps_opened, vps_closed string) (bool, string) {
+	/* 	Check if SOCKS5 proxy is valid.
+		1. Check if SOCKS5 proxy service is alive.
+	   	2. Connect to the open port on the server under your control using proxy.
+	   	3. Connect to the closed port on the server under your control using proxy.
+	   		- If both checks are true then, SOCKS5 proxy is considered as valid - true.
+	   		- If one of the check is false, SOCKS5 proxy is considered as invalid - false.
+	   	3. Returns true/false and s5_addr.
+	*/
+	// Check if S5 is alive.
+	d := net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: -1 * time.Second,
+	}
+	conn, err := d.Dial("tcp", socks5_addr)
+	if err != nil {
+		return false, socks5_addr
 	} else {
-		// If s5_addr was invalid ask que for another
-		s5_reqs <- true
+		conn.Close()
+	}
+	// Create SOCKS5 dialer
+	socks5_dialer_tcp := create_socks5_tcp_dialer(socks5_addr)
+	// Make connection using SOCKS5 proxy to the opened port on the vps.
+	conn_1, err := socks5_dialer_tcp.Dial("tcp", vps_opened)
+	// If it was successful and not generate any error then check1 is passed.
+	if err == nil {
+		conn_1.Close()
+		// If error was generated then check is not passed and do not make check2.
+	} else {
+		return false, socks5_addr
+	}
+	// Make connection using SOCKS5 proxy to the closed port on the vps.
+	conn_2, err := socks5_dialer_tcp.Dial("tcp", vps_closed)
+	// If it was unsuccessful and error was generated then check2 is passed.
+	if err != nil {
+		// If both checks were passed then return false.
+		return true, socks5_addr
+		// If error was not generated then check2 is not passed.
+	} else {
+		conn_2.Close()
+		return false, socks5_addr
 	}
 }
 
@@ -616,6 +602,7 @@ func main() {
 	vps_opened := flag.String("o", "127.0.0.1:7192", "Opened port on your VPS")
 	vps_closed := flag.String("c", "127.0.0.1:443", "Closed port on your VPS")
 	download_s5 := flag.Bool("d", false, "Download daily updated free S5 list")
+	n_threads := flag.Int("t", 200, "Number of threads")
 	flag.Parse()
 	// END OF PARSING FLAGS ===============================================
 
@@ -636,15 +623,15 @@ func main() {
 	// INITIAL S5 PROXIES CHECK
 	s5_array := s5_init_check(init_s5_array)
 	// PRINT VARIABLES
-	print_options(ip_list, port_list, target_list, s5_array)
+	print_options(target_list, s5_array)
 	// START S5 MANAGER AS A GO ROUTINE
-	go s5_manager(s5_array, *vps_opened, *vps_closed)
+	go s5_manager(s5_array, *vps_opened, *vps_closed, *n_threads)
 	time.Sleep(1 * time.Second)
 	// START TCP SCANNING
 	fmt.Println("=================================")
 	fmt.Println("START SCANNING")
 	fmt.Println("=================================")
-	found_services := tcp_scanner(target_list)
+	found_services := tcp_scanner(target_list, *n_threads)
 	// PRINT ALIVE SERVICES AFTER TCP PORT SCANNING
 	fmt.Println("=================================")
 	for _, service := range found_services {
@@ -662,3 +649,4 @@ func main() {
 //https://stackoverflow.com/questions/62608339/golang-check-udp-port-open
 //https://ops.tips/blog/udp-client-and-server-in-go/
 // 4. Return not valid S5 list to remove for future scans.
+// 5. Timeout on Socks5_proxy ---request---> target.
